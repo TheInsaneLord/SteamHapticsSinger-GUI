@@ -1,0 +1,233 @@
+diff --git a/main.cpp b/main.cpp
+index 2ab6774..7e20a75 100755
+--- a/main.cpp
++++ b/main.cpp
+@@ -1,6 +1,8 @@
+ #include <iostream>
+ #include <chrono>
+ #include <cstring>
++#include <vector>
++#include <algorithm>
+ 
+ #include <stdint-gcc.h>
+ #include <unistd.h>
+@@ -38,6 +40,8 @@ bool legacyInst = false;
+ bool directVel = false;
+ bool tritonTrackpad = false;
+ bool tritonRumble = false;
++bool pitchSplit = false;
++int  splitNote  = 60;
+ int channelCount = 2;
+ 
+ enum class ControllerType {
+@@ -64,55 +68,95 @@ bool SteamController_Open(SteamControllerInfos* controller){
+ 	if(!controller)
+ 		return false;
+ 
+-	libusb_device_handle* dev_handle;
+-	//Open Steam Controller device
+-	if((dev_handle = libusb_open_device_with_vid_pid(NULL, 0x28DE, 0x1102)) != NULL){ // Wired Steam Controller (2015)
+-		cout<<"Found wired Steam Controller (2015)"<<endl;
+-		controller->dev_handle = dev_handle;
+-		controller->interfaceNum = 2;
+-		controller->type = ControllerType::Original;
++	struct KnownDevice {
++		uint16_t vid;
++		uint16_t pid;
++		const char* name;
++		ControllerType type;
++		int interfaceNum;
++		int endPoint;
++	};
++	static const KnownDevice knownDevices[] = {
++		{0x28DE, 0x1102, "Wired Steam Controller (2015)", ControllerType::Original, 2,    0},
++		{0x28DE, 0x1142, "Steam Controller (2015) Dongle",ControllerType::Original, 1,    0},
++		{0x28DE, 0x1302, "Wired Steam Controller (2026)", ControllerType::Triton,   0, 0x01},
++		{0x28DE, 0x1304, "Steam Puck",                    ControllerType::Triton,   2, 0x02},
++		{0x28DE, 0x1205, "Steam Deck",                    ControllerType::Jupiter,  2,    0},
++	};
++
++	libusb_device** devs;
++	ssize_t cnt = libusb_get_device_list(NULL, &devs);
++	if(cnt < 0){
++		cout << "Failed to enumerate USB devices" << endl;
++		return false;
+ 	}
+-	else if((dev_handle = libusb_open_device_with_vid_pid(NULL, 0x28DE, 0x1142)) != NULL){ // Steam Controller (2015) dongle //TODO: FIX
+-		cout<<"Found Steam Dongle, will attempt to use the first Steam Controller (2015)"<<endl;
+-		controller->dev_handle = dev_handle;
+-		controller->interfaceNum = 1;
+-		controller->type = ControllerType::Original;
+-	} 
+-	else if((dev_handle = libusb_open_device_with_vid_pid(NULL, 0x28DE, 0x1302)) != NULL){ // Steam Controller (2026)
+-		cout<<"Found wired Steam Controller (2026)"<<endl;
+-		controller->dev_handle = dev_handle;
+-		controller->interfaceNum = 0;
+-		controller->type = ControllerType::Triton;
+-		controller->endPoint = 0x01;
+-		if (!tritonTrackpad && !tritonRumble) channelCount = 4;
++
++	struct Candidate { libusb_device* dev; const KnownDevice* info; };
++	Candidate candidates[16];
++	int candidateCount = 0;
++
++	for(ssize_t i = 0; i < cnt && candidateCount < 16; i++){
++		libusb_device_descriptor desc;
++		if(libusb_get_device_descriptor(devs[i], &desc) < 0)
++			continue;
++		for(const auto& kd : knownDevices){
++			if(desc.idVendor == kd.vid && desc.idProduct == kd.pid){
++				candidates[candidateCount++] = {devs[i], &kd};
++				break;
++			}
++		}
+ 	}
+-	else if((dev_handle = libusb_open_device_with_vid_pid(NULL, 0x28DE, 0x1304)) != NULL){ // Steam Puck
+-		cout<<"Found Steam Puck, will attempt to use the first Steam Controller (2026)"<<endl;
+-		controller->dev_handle = dev_handle;
+-		controller->interfaceNum = 2;
+-		controller->type = ControllerType::Triton;
+-		controller->endPoint = 0x02;
+-		//Workaround for controller disconnecting after puck reconnects on Windows
+-		#ifdef _WIN32
+-		cout << "Reconnect controller and press Enter...";
+-    	cin.get(); 
+-		#endif
+-		if (!tritonTrackpad && !tritonRumble) channelCount = 4;
++
++	if(candidateCount == 0){
++		cout << "No device found" << endl;
++		libusb_free_device_list(devs, 1);
++		return false;
+ 	}
+-	else if((dev_handle = libusb_open_device_with_vid_pid(NULL, 0x28DE, 0x1205)) != NULL){ // Steam Deck
+-		cout<<"Found Steam Deck"<<endl;
+-		controller->dev_handle = dev_handle;
+-		controller->interfaceNum = 2;
+-		controller->type = ControllerType::Jupiter;
++
++	int chosen = 0;
++	if(candidateCount > 1){
++		cout << "Multiple devices found:" << endl;
++		for(int i = 0; i < candidateCount; i++)
++			cout << "  " << (i+1) << ". " << candidates[i].info->name << endl;
++		cout << "Select device (1-" << candidateCount << "): ";
++		cin >> chosen;
++		chosen--;
++		cin.ignore();
++		if(chosen < 0 || chosen >= candidateCount){
++			cout << "Invalid selection" << endl;
++			libusb_free_device_list(devs, 1);
++			return false;
++		}
+ 	}
+-	else{
+-		cout<<"No device found"<<endl;
++
++	libusb_device_handle* dev_handle;
++	if(libusb_open(candidates[chosen].dev, &dev_handle) < 0){
++		cout << "Failed to open device" << endl;
++		libusb_free_device_list(devs, 1);
+ 		return false;
+ 	}
+ 
+-	//On Linux, automatically detach and reattach kernel module
+-	libusb_set_auto_detach_kernel_driver(controller->dev_handle,1);
+-	
++	libusb_free_device_list(devs, 1);
++
++	const KnownDevice* info = candidates[chosen].info;
++	cout << "Found " << info->name << endl;
++
++	controller->dev_handle = dev_handle;
++	controller->type = info->type;
++	controller->interfaceNum = info->interfaceNum;
++	controller->endPoint = info->endPoint;
++
++	if(info->type == ControllerType::Triton){
++		#ifdef _WIN32
++		if(info->pid == 0x1304){
++			cout << "Reconnect controller and press Enter...";
++			cin.get();
++		}
++		#endif
++		if(!tritonTrackpad && !tritonRumble) channelCount = 4;
++	}
++
++	libusb_set_auto_detach_kernel_driver(controller->dev_handle, 1);
+ 	return true;
+ }
+ 
+@@ -292,6 +336,32 @@ void playSong(SteamControllerInfos* controller,const ParamsStruct params){
+ 	cout << "Starting playback of " << params.midiSong  << "..." << endl;
+ 	sleep(1);
+ 
++	// Auto-detect single-channel MIDI and enable pitch split
++	if (!pitchSplit) {
++		bool channelActive[4] = {false, false, false, false};
++		std::vector<int> ch0Notes;
++		MidiFileEvent_t scanEv = MidiFile_getFirstEvent(midifile);
++		while (scanEv != NULL) {
++			if (MidiFileEvent_isNoteStartEvent(scanEv)) {
++				int ch = MidiFileVoiceEvent_getChannel(scanEv);
++				int vel = MidiFileNoteStartEvent_getVelocity(scanEv);
++				if (ch >= 0 && ch < channelCount && vel > 0) {
++					channelActive[ch] = true;
++					if (ch == 0) ch0Notes.push_back(MidiFileNoteStartEvent_getNote(scanEv));
++				}
++			}
++			scanEv = MidiFileEvent_getNextEventInFile(scanEv);
++		}
++		int activeCount = 0;
++		for (int i = 0; i < channelCount; i++) if (channelActive[i]) activeCount++;
++		if (activeCount == 1 && channelActive[0] && !ch0Notes.empty()) {
++			pitchSplit = true;
++			std::sort(ch0Notes.begin(), ch0Notes.end());
++			splitNote = ch0Notes[ch0Notes.size() / 2];
++			cout << "Single-channel MIDI: splitting notes by pitch at " << splitNote << endl;
++		}
++	}
++
+ 	//This will contains the previous events accepted for each channel
+ 	MidiFileEvent_t acceptedEventPerChannel[channelCount] = {0};
+ 
+@@ -350,16 +420,33 @@ void playSong(SteamControllerInfos* controller,const ParamsStruct params){
+ 			int8_t eventNote = NOTE_STOP;
+ 			int8_t eventVel  = 0;
+ 			if(MidiFileEvent_isNoteStartEvent(selectedEvent)){
+-				//Send note stop before playing to prevent Steam Controller (2026) rebooting when using motors
+-				SteamHaptics_PlayNote(controller,currentChannel,NOTE_STOP,0);
+ 				eventNote = MidiFileNoteStartEvent_getNote(selectedEvent);
+ 				eventVel  = MidiFileNoteStartEvent_getVelocity(selectedEvent);
+ 			}
+ 
+-			//Play notes
+-			SteamHaptics_PlayNote(controller,currentChannel,eventNote,eventVel);
+-
+-			displayPlayedNotes(currentChannel,eventNote);
++			if(pitchSplit && currentChannel == 0){
++				if(eventNote == NOTE_STOP){
++					// Stop both haptics
++					SteamHaptics_PlayNote(controller, 0, NOTE_STOP, 0);
++					SteamHaptics_PlayNote(controller, 1, NOTE_STOP, 0);
++					displayPlayedNotes(0, NOTE_STOP);
++					displayPlayedNotes(1, NOTE_STOP);
++				} else {
++					// Route by pitch: low notes left (ch 1), high notes right (ch 0)
++					int playChannel = (eventNote >= splitNote) ? 0 : 1;
++					SteamHaptics_PlayNote(controller, playChannel, NOTE_STOP, 0);
++					SteamHaptics_PlayNote(controller, playChannel, eventNote, eventVel);
++					displayPlayedNotes(playChannel, eventNote);
++				}
++			} else {
++				if(MidiFileEvent_isNoteStartEvent(selectedEvent)){
++					//Send note stop before playing to prevent Steam Controller (2026) rebooting when using motors
++					SteamHaptics_PlayNote(controller, currentChannel, NOTE_STOP, 0);
++				}
++				//Play notes
++				SteamHaptics_PlayNote(controller, currentChannel, eventNote, eventVel);
++				displayPlayedNotes(currentChannel, eventNote);
++			}
+ 		}
+ 	}
+ 
