@@ -13,14 +13,14 @@ index 2ab6774..7e20a75 100755
  #include <unistd.h>
 @@ -38,6 +40,8 @@ bool legacyInst = false;
  bool directVel = false;
- bool tritonTrackpad = false;
- bool tritonRumble = false;
+ bool tritonLimit = false;
+ bool tritonSwap = false;
 +bool pitchSplit = false;
 +int  splitNote  = 60;
  int channelCount = 2;
  
  enum class ControllerType {
-@@ -64,55 +68,95 @@ bool SteamController_Open(SteamControllerInfos* controller){
+@@ -64,56 +68,96 @@ bool SteamController_Open(SteamControllerInfos* controller){
  	if(!controller)
  		return false;
  
@@ -31,6 +31,49 @@ index 2ab6774..7e20a75 100755
 -		controller->dev_handle = dev_handle;
 -		controller->interfaceNum = 2;
 -		controller->type = ControllerType::Original;
+-	}
+-	else if((dev_handle = libusb_open_device_with_vid_pid(NULL, 0x28DE, 0x1142)) != NULL){ // Steam Controller (2015) dongle //TODO: FIX
+-		cout<<"Found Steam Dongle, will attempt to use the first Steam Controller (2015)"<<endl;
+-		controller->dev_handle = dev_handle;
+-		controller->interfaceNum = 1;
+-		controller->type = ControllerType::Original;
+-	} 
+-	else if((dev_handle = libusb_open_device_with_vid_pid(NULL, 0x28DE, 0x1302)) != NULL){ // Steam Controller (2026)
+-		cout<<"Found wired Steam Controller (2026)"<<endl;
+-		controller->dev_handle = dev_handle;
+-		controller->interfaceNum = 0;
+-		controller->type = ControllerType::Triton;
+-		controller->endPoint = 0x01;
+-		if (!tritonLimit) channelCount = 4;
+-	}
+-	else if((dev_handle = libusb_open_device_with_vid_pid(NULL, 0x28DE, 0x1304)) != NULL){ // Steam Puck
+-		cout<<"Found Steam Puck, will attempt to use the first Steam Controller (2026)"<<endl;
+-		controller->dev_handle = dev_handle;
+-		controller->interfaceNum = 2;
+-		controller->type = ControllerType::Triton;
+-		controller->endPoint = 0x02;
+-		//Workaround for controller disconnecting after puck reconnects on Windows
+-		#ifdef _WIN32
+-		cout << "Reconnect controller and press Enter...";
+-    	cin.get(); 
+-		#endif
+-		if (!tritonLimit) channelCount = 4;
+-	}
+-	else if((dev_handle = libusb_open_device_with_vid_pid(NULL, 0x28DE, 0x1205)) != NULL){ // Steam Deck
+-		cout<<"Found Steam Deck"<<endl;
+-		controller->dev_handle = dev_handle;
+-		controller->interfaceNum = 2;
+-		controller->type = ControllerType::Jupiter;
+-	}
+-	else{
+-		cout<<"No device found"<<endl;
+-		return false;
+-	}
+-
+-	//On Linux, automatically detach and reattach kernel module
+-	libusb_set_auto_detach_kernel_driver(controller->dev_handle,1);
+-	
+-	return true;
 +	struct KnownDevice {
 +		uint16_t vid;
 +		uint16_t pid;
@@ -52,20 +95,7 @@ index 2ab6774..7e20a75 100755
 +	if(cnt < 0){
 +		cout << "Failed to enumerate USB devices" << endl;
 +		return false;
- 	}
--	else if((dev_handle = libusb_open_device_with_vid_pid(NULL, 0x28DE, 0x1142)) != NULL){ // Steam Controller (2015) dongle //TODO: FIX
--		cout<<"Found Steam Dongle, will attempt to use the first Steam Controller (2015)"<<endl;
--		controller->dev_handle = dev_handle;
--		controller->interfaceNum = 1;
--		controller->type = ControllerType::Original;
--	} 
--	else if((dev_handle = libusb_open_device_with_vid_pid(NULL, 0x28DE, 0x1302)) != NULL){ // Steam Controller (2026)
--		cout<<"Found wired Steam Controller (2026)"<<endl;
--		controller->dev_handle = dev_handle;
--		controller->interfaceNum = 0;
--		controller->type = ControllerType::Triton;
--		controller->endPoint = 0x01;
--		if (!tritonTrackpad && !tritonRumble) channelCount = 4;
++	}
 +
 +	struct Candidate { libusb_device* dev; const KnownDevice* info; };
 +	Candidate candidates[16];
@@ -81,30 +111,13 @@ index 2ab6774..7e20a75 100755
 +				break;
 +			}
 +		}
- 	}
--	else if((dev_handle = libusb_open_device_with_vid_pid(NULL, 0x28DE, 0x1304)) != NULL){ // Steam Puck
--		cout<<"Found Steam Puck, will attempt to use the first Steam Controller (2026)"<<endl;
--		controller->dev_handle = dev_handle;
--		controller->interfaceNum = 2;
--		controller->type = ControllerType::Triton;
--		controller->endPoint = 0x02;
--		//Workaround for controller disconnecting after puck reconnects on Windows
--		#ifdef _WIN32
--		cout << "Reconnect controller and press Enter...";
--    	cin.get(); 
--		#endif
--		if (!tritonTrackpad && !tritonRumble) channelCount = 4;
++	}
 +
 +	if(candidateCount == 0){
 +		cout << "No device found" << endl;
 +		libusb_free_device_list(devs, 1);
 +		return false;
- 	}
--	else if((dev_handle = libusb_open_device_with_vid_pid(NULL, 0x28DE, 0x1205)) != NULL){ // Steam Deck
--		cout<<"Found Steam Deck"<<endl;
--		controller->dev_handle = dev_handle;
--		controller->interfaceNum = 2;
--		controller->type = ControllerType::Jupiter;
++	}
 +
 +	int chosen = 0;
 +	if(candidateCount > 1){
@@ -120,20 +133,15 @@ index 2ab6774..7e20a75 100755
 +			libusb_free_device_list(devs, 1);
 +			return false;
 +		}
- 	}
--	else{
--		cout<<"No device found"<<endl;
++	}
 +
 +	libusb_device_handle* dev_handle;
 +	if(libusb_open(candidates[chosen].dev, &dev_handle) < 0){
 +		cout << "Failed to open device" << endl;
 +		libusb_free_device_list(devs, 1);
- 		return false;
- 	}
- 
--	//On Linux, automatically detach and reattach kernel module
--	libusb_set_auto_detach_kernel_driver(controller->dev_handle,1);
--	
++		return false;
++	}
++
 +	libusb_free_device_list(devs, 1);
 +
 +	const KnownDevice* info = candidates[chosen].info;
@@ -151,15 +159,16 @@ index 2ab6774..7e20a75 100755
 +			cin.get();
 +		}
 +		#endif
-+		if(!tritonTrackpad && !tritonRumble) channelCount = 4;
++		if(!tritonLimit) channelCount = 4;
 +	}
 +
 +	libusb_set_auto_detach_kernel_driver(controller->dev_handle, 1);
- 	return true;
++	return true;
  }
  
+ bool SteamController_Claim(SteamControllerInfos* controller){
 @@ -292,6 +336,32 @@ void playSong(SteamControllerInfos* controller,const ParamsStruct params){
- 	cout << "Starting playback of " << params.midiSong  << "..." << endl;
+ 	cout << "Starting playback of " << params.midiSong  << "... press Ctrl+C anytime to stop" << endl;
  	sleep(1);
  
 +	// Auto-detect single-channel MIDI and enable pitch split
@@ -189,7 +198,7 @@ index 2ab6774..7e20a75 100755
 +	}
 +
  	//This will contains the previous events accepted for each channel
- 	MidiFileEvent_t acceptedEventPerChannel[channelCount] = {0};
+ 	MidiFileEvent_t acceptedEventPerChannel[CHANNEL_COUNT] = {0};
  
 @@ -350,16 +420,33 @@ void playSong(SteamControllerInfos* controller,const ParamsStruct params){
  			int8_t eventNote = NOTE_STOP;
