@@ -68,7 +68,7 @@ class App(tk.Tk):
         ttk.Checkbutton(opt_frame, text="-p  Repeat song",              variable=self.repeat_var   ).grid(row=0, column=0, sticky="w", padx=8, pady=2)
         ttk.Checkbutton(opt_frame, text="-e  Direct velocity → gain",   variable=self.directvel_var).grid(row=1, column=0, sticky="w", padx=8, pady=2)
         ttk.Checkbutton(opt_frame, text="-t  Trackpads only (SC 2026)", variable=self.trackpad_var ).grid(row=0, column=1, sticky="w", padx=8, pady=2)
-        ttk.Checkbutton(opt_frame, text="-b  Rumble channels (SC 2026)",variable=self.rumble_var   ).grid(row=1, column=1, sticky="w", padx=8, pady=2)
+        ttk.Checkbutton(opt_frame, text="-s  Swap rumble/trackpad (SC 2026)",variable=self.rumble_var   ).grid(row=1, column=1, sticky="w", padx=8, pady=2)
 
         interval_frame = ttk.Frame(opt_frame)
         interval_frame.grid(row=2, column=0, columnspan=2, sticky="w", padx=8, pady=4)
@@ -96,7 +96,9 @@ class App(tk.Tk):
         self.log.pack(fill="both", expand=True, padx=4, pady=4)
 
     def _browse(self):
-        path = filedialog.askopenfilename(filetypes=[("MIDI files", "*.mid *.midi"), ("All files", "*")])
+        path = filedialog.askopenfilename(
+            initialdir=os.path.dirname(os.path.abspath(__file__)),
+            filetypes=[("MIDI files", "*.mid *.midi"), ("All files", "*")])
         if path:
             self.file_var.set(path)
 
@@ -105,7 +107,7 @@ class App(tk.Tk):
         if self.repeat_var.get():    cmd.append("-p")
         if self.directvel_var.get(): cmd.append("-e")
         if self.trackpad_var.get():  cmd.append("-t")
-        if self.rumble_var.get():    cmd.append("-b")
+        if self.rumble_var.get():    cmd.append("-s")
         interval = self.interval_var.get().strip()
         if interval and interval != "10000":
             cmd += ["-i", interval]
