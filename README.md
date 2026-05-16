@@ -21,8 +21,12 @@ No third-party Python packages are needed.
 ## Installation
 
 1. Build Steam Haptics Singer from the [original repo](https://github.com/CrazyCritic89/SteamHapticsSinger) first (`make` on Linux).
-2. Drop `gui.py` into the same folder as the compiled `steam-haptics-singer` binary.
-3. Run it:
+2. Install the files from this repo and put them in the [original repo](https://github.com/CrazyCritic89/SteamHapticsSinger) folder.
+  ```
+  git clone https://github.com/TheInsaneLord/SteamHapticsSinger-GUI.git
+  mv SteamHapticsSinger-GUI/* .
+  ```
+3. Run the GUI:
    ```
    python3 gui.py
    ```
@@ -33,7 +37,7 @@ Single-channel MIDI files normally only play on the right haptic. `pitch_split.p
 
 To apply it, from inside the original repo folder:
 ```
-git apply /path/to/pitch_split.patch
+git apply pitch_split.patch
 make
 ```
 
